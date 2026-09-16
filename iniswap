@@ -1,0 +1,157 @@
+#!/bin/bash
+set -euo pipefail
+
+VALID_INITS="openrc runit"
+LIMINE_CONF="/boot/limine.conf"
+LIB_DIR="/usr/lib/zerene/iniswap"
+
+usage() {
+    echo "Usage: iniswap [--pass] <init>"
+    echo
+    echo "Swap the init system on next boot."
+    echo
+    echo "Commands:"
+    echo "  iniswap <init>    Swap to a different init system"
+    echo "  iniswap --status  Show current init system"
+    echo
+    echo "Flags:"
+    echo "  --pass            Skip confirmation prompt (for declarative use)"
+    echo
+    echo "Supported init systems:"
+    echo "  openrc   OpenRC (default)"
+    echo "  runit    runit"
+}
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "To swap your init system, you need superuser privileges." >&2
+        exit 1
+    fi
+}
+
+detect_current_init() {
+    if [ ! -f "$LIMINE_CONF" ]; then
+        echo "openrc"
+        return
+    fi
+
+    local cmdline
+    cmdline=$(grep 'cmdline:' "$LIMINE_CONF" 2>/dev/null || true)
+
+    if echo "$cmdline" | grep -q 'init='; then
+        local init_path
+        init_path=$(echo "$cmdline" | sed -n 's/.*init=\([^ ]*\).*/\1/p')
+        case "$init_path" in
+            */runit-init) echo "runit" ;;
+            *)            echo "unknown" ;;
+        esac
+    else
+        echo "openrc"
+    fi
+}
+
+validate_init() {
+    local name="$1"
+    for valid in $VALID_INITS; do
+        if [ "$name" = "$valid" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+update_boot() {
+    local init="$1"
+    local tmp="$LIMINE_CONF.tmp"
+
+    # Strip any existing init= parameter first so re-runs never double it.
+    sed 's/ init=[^ ]*//' "$LIMINE_CONF" > "$tmp"
+
+    case "$init" in
+        openrc)
+            ;;
+        runit)
+            sed -i "s|cmdline:\(.*\)|cmdline:\1 init=/sbin/runit-init|" "$tmp"
+            ;;
+    esac
+
+    mv "$tmp" "$LIMINE_CONF"
+}
+
+# --- main ---
+
+check_root
+
+# Parse flags
+SKIP_CONFIRM=false
+if [ "${1:-}" = "--pass" ]; then
+    SKIP_CONFIRM=true
+    shift
+fi
+
+if [ "${1:-}" = "--status" ] || [ "${1:-}" = "-s" ]; then
+    current=$(detect_current_init)
+    echo "Current init: $current"
+    exit 0
+fi
+
+if [ $# -lt 1 ]; then
+    usage
+    exit 1
+fi
+
+target="$1"
+
+if ! validate_init "$target"; then
+    echo "Error: unsupported init '$target'." >&2
+    echo "Supported: $VALID_INITS" >&2
+    exit 1
+fi
+
+current=$(detect_current_init)
+
+if [ "$current" = "$target" ]; then
+    echo "Already running $target."
+    exit 0
+fi
+
+echo "Swapping init: $current -> $target"
+echo
+if [ "$SKIP_CONFIRM" = false ]; then
+    read -r -p "Swap init? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+fi
+echo
+
+# Create a pre-swap generation so we can always roll back
+echo "Creating pre-swap generation..."
+if ! genzee create "before swap to $target"; then
+    echo "Warning: failed to create pre-swap generation." >&2
+fi
+echo
+
+# Source init-specific handler
+handler="$LIB_DIR/$target.sh"
+if [ ! -f "$handler" ]; then
+    echo "Error: handler not found: $handler" >&2
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+. "$handler"
+
+echo "Installing $target..."
+install_"$target"
+
+echo "Generating $target services..."
+generate_"$target"_services
+
+echo "Updating boot configuration..."
+update_boot "$target"
+
+echo
+echo "Done. Init swapped: $current -> $target"
+echo "Reboot to activate $target."
