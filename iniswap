@@ -128,7 +128,7 @@ echo
 
 # Create a pre-swap generation so we can always roll back
 echo "Creating pre-swap generation..."
-if ! genzee create "before swap to $target"; then
+if ! chronos create "before swap to $target"; then
     echo "Warning: failed to create pre-swap generation." >&2
 fi
 echo
