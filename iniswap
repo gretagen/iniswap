@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_INITS="openrc runit"
+VALID_INITS="openrc runit dinit"
 LIMINE_CONF="/boot/limine.conf"
-LIB_DIR="/usr/lib/zerene/iniswap"
+LIB_DIR="/usr/lib/declaration/iniswap"
 
 usage() {
     echo "Usage: iniswap [--pass] <init>"
@@ -15,11 +15,12 @@ usage() {
     echo "  iniswap --status  Show current init system"
     echo
     echo "Flags:"
-    echo "  --pass            Skip confirmation prompt (for declarative use)"
+    echo "  --pass            Skip confirmation prompt"
     echo
     echo "Supported init systems:"
     echo "  openrc   OpenRC (default)"
     echo "  runit    runit"
+    echo "  dinit    dinit"
 }
 
 check_root() {
@@ -42,8 +43,10 @@ detect_current_init() {
         local init_path
         init_path=$(echo "$cmdline" | sed -n 's/.*init=\([^ ]*\).*/\1/p')
         case "$init_path" in
-            */runit-init) echo "runit" ;;
-            *)            echo "unknown" ;;
+            */runit-init)   echo "runit" ;;
+            */dinit)        echo "dinit" ;;
+            */openrc-init)  echo "openrc" ;;
+            *)              echo "unknown" ;;
         esac
     else
         echo "openrc"
@@ -69,9 +72,13 @@ update_boot() {
 
     case "$init" in
         openrc)
+            sed -i "s|cmdline:\(.*\)|cmdline:\1 init=/sbin/openrc-init|" "$tmp"
             ;;
         runit)
             sed -i "s|cmdline:\(.*\)|cmdline:\1 init=/sbin/runit-init|" "$tmp"
+            ;;
+        dinit)
+            sed -i "s|cmdline:\(.*\)|cmdline:\1 init=/sbin/dinit|" "$tmp"
             ;;
     esac
 
