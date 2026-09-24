@@ -85,6 +85,23 @@ update_boot() {
     mv "$tmp" "$LIMINE_CONF"
 }
 
+# --- record init identity ------------------------------------------------
+# The universal shutdown/reboot commands (/usr/bin/shutdown, /usr/bin/reboot)
+# read /var/db/init/current and fall back to /var/db/init/previous: after a
+# swap the target init is only declared, not yet PID1, so its own shutdown
+# tool doesn't work until the next boot — which is exactly when the
+# shutdown/reboot wrappers roll down to "previous" (the then-running init).
+record_init_state() {
+    local db="/var/db/init"
+    mkdir -p "$db"
+    # previous <- current (only if current already has state)
+    if [ -s "$db/current" ]; then
+        cat "$db/current" > "$db/previous"
+    fi
+    # current <- newly selected init
+    printf '%s\n' "$target" > "$db/current"
+}
+
 # --- main ---
 
 check_root
@@ -158,6 +175,9 @@ generate_"$target"_services
 
 echo "Updating boot configuration..."
 update_boot "$target"
+
+echo "Recording init state..."
+record_init_state
 
 echo
 echo "Done. Init swapped: $current -> $target"
