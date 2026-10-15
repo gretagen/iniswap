@@ -1,0 +1,220 @@
+#!/bin/bash
+# universal shutdown/reboot — Haliade OS
+#
+# Works regardless of which init system (OpenRC, runit, dinit, systemd) is
+# selected. Read the declared init from /var/db/init/current (written by
+# iniswap after every swap) and fall back to /var/db/init/previous, then to
+# the init that is actually PID1 (/proc/1/comm), then to a direct busybox
+# kernel action.
+#
+# Why even the declared inits are checked against PID1: iniswap swaps the
+# init that starts on the *next* reboot. Until then the newly declared init
+# is not running, so its shutdown tool cannot work — and some tools lie
+# about it: openrc-shutdown broadcasts "The system will power off now",
+# fails to reach openrc-init's fifo, and still exits 0. Guarding each try
+# with /proc/1/comm prevents that false success from stalling shutdown.
+#
+# The final fallback is a direct kernel action via busybox — never this
+# wrapper again: /sbin/shutdown and /bin/shutdown resolve back to this
+# script, and re-execbing it when every init tool failed used to loop
+# forever (the "dinitctl: unrecognized command: reboot" flood).
+#
+# Usage:
+#   reboot                      reboot the machine
+#   shutdown [-r] [-h|-p]       reboot / halt / poweroff (default poweroff)
+
+# Tool locations (overridable for packaging and tests).
+OPENRC_SHUTDOWN=${OPENRC_SHUTDOWN:-/sbin/openrc-shutdown}
+RUNIT_INIT=${RUNIT_INIT:-/sbin/runit-init}
+RUNIT_INIT_ALT=${RUNIT_INIT_ALT:-/usr/sbin/runit-init}
+# dinit's own shutdown front-ends (symlinks to dinit-shutdown). dinitctl is
+# deliberately NOT used here: its only "shutdown" command always requests
+# shutdown_type_t::HALT (kernel halt — fans stay on, power never cuts) and
+# it has no reboot command at all ("dinitctl: unrecognized command: reboot").
+# The front-ends ask dinit for a service rollback with the right type, and
+# dinit (PID1) re-execs "dinit-shutdown --system -p|-r|-h" afterwards.
+# They take no time argument: a positional arg makes them print help and exit.
+DINIT_POWEROFF=${DINIT_POWEROFF:-/usr/sbin/dinit-poweroff}
+DINIT_REBOOT=${DINIT_REBOOT:-/usr/sbin/dinit-reboot}
+DINIT_SHUTDOWN=${DINIT_SHUTDOWN:-/usr/sbin/dinit-shutdown}
+# systemd's control tool. systemctl missing → fall through to the busybox
+# last resort, same as any other absent init tool.
+SYSTEMCTL=${SYSTEMCTL:-/usr/bin/systemctl}
+BUSYBOX=${BUSYBOX:-/bin/busybox}
+RUNIT_MARKER=${RUNIT_MARKER:-/etc/runit/reboot}
+FALLBACK_SHUTDOWN=${FALLBACK_SHUTDOWN:-/sbin/shutdown}
+INIT_DB=${INIT_DB:-/var/db/init}
+ACTIVE_INIT=${ACTIVE_INIT:-}
+
+# --- determine the requested action --------------------------------------
+name="${0##*/}"
+action="poweroff"                 # default: power off
+case "$name" in
+    reboot)
+        action="reboot"
+        ;;
+    shutdown)
+        while getopts "rhpH" opt 2>/dev/null; do
+            case "$opt" in
+                r)        action="reboot"   ;;
+                h|p|P)    action="poweroff" ;;
+                H)        action="halt"     ;;
+                *)        : ;;
+            esac
+        done
+        shift $((OPTIND - 1))
+        ;;
+esac
+timearg="${1:-now}"
+
+# --- what init is actually running as PID1? ------------------------------
+active_init() {
+    [ -n "$ACTIVE_INIT" ] && { printf '%s\n' "$ACTIVE_INIT"; return; }
+    local comm
+    comm="$(cat /proc/1/comm 2>/dev/null)"
+    case "$comm" in
+        openrc-init) printf '%s\n' "openrc"   ;;
+        # init=/sbin/runit-init is a trampoline: runit-init sees pid 1 and
+        # execve()s /sbin/runit, so PID1's comm becomes "runit" from then on.
+        runit|runit-init) printf '%s\n' "runit" ;;
+        dinit)       printf '%s\n' "dinit"    ;;
+        systemd)     printf '%s\n' "systemd"  ;;
+        busybox|init) printf '%s\n' "busybox" ;; # busybox init reports "init"
+        *)           printf '%s\n' "unknown"  ;;
+    esac
+}
+
+# --- run one init's shutdown tool; exit status tells us if it worked -----
+try_init() {
+    init="$1"
+    case "$init:$action" in
+        openrc:*)
+            flag="-p"
+            [ "$action" = "reboot" ] && flag="-r"
+            [ "$action" = "halt" ]   && flag="-H"
+            if [ -x "$OPENRC_SHUTDOWN" ]; then
+                "$OPENRC_SHUTDOWN" "$flag" "$timearg"
+                return $?
+            fi
+            ;;
+        runit:*)
+            # runit-init: 0 = halt/poweroff, 6 = reboot. It sets the stage-3
+            # markers itself (/etc/runit/stopit executable, /etc/runit/reboot
+            # executable only for reboot) and SIGCONTs runit (PID1), which
+            # then ends stage 2 and runs /etc/runit/3.
+            code=0
+            [ "$action" = "reboot" ] && code=6
+            if [ -x "$RUNIT_INIT" ]; then
+                "$RUNIT_INIT" "$code"; return $?
+            elif [ -x "$RUNIT_INIT_ALT" ]; then
+                "$RUNIT_INIT_ALT" "$code"; return $?
+            fi
+            # runit-init missing: replicate what it does by hand so the
+            # wrapper still works — set the markers, then SIGCONT PID1
+            # (runit only reacts to SIGCONT in stage 2, and only when
+            # /etc/runit/stopit is owner-executable).
+            local rdir="${RUNIT_MARKER%/*}"
+            if [ -d "$rdir" ]; then
+                # recreate from scratch: a previous attempt may have left
+                # them exec-only (0100), which a plain "> file" cannot reopen
+                rm -f "$rdir/stopit"
+                : > "$rdir/stopit" || return 1
+                chmod 0100 "$rdir/stopit" || return 1
+                if [ "$action" = "reboot" ]; then
+                    rm -f "$RUNIT_MARKER"
+                    : > "$RUNIT_MARKER" || return 1
+                    chmod 0100 "$RUNIT_MARKER" || return 1
+                else
+                    rm -f "$RUNIT_MARKER"
+                fi
+                kill -CONT 1 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        dinit:*)
+            # Request the rollback with the right shutdown type; dinit
+            # (PID1) does the rest. Never dinitctl: its "shutdown" is
+            # HALT-only and it has no reboot command.
+            local tool="" dargs=()
+            case "$action" in
+                reboot)   tool="$DINIT_REBOOT"  ;;
+                halt)     tool="$DINIT_SHUTDOWN"; dargs=(-h) ;;
+                poweroff) tool="$DINIT_POWEROFF" ;;
+            esac
+            if [ -n "$tool" ] && [ -x "$tool" ]; then
+                # no time argument — see the tool note at the top
+                "$tool" "${dargs[@]}"; return $?
+            fi
+            ;;
+        systemd:*)
+            # systemctl asks PID1 (systemd) to stop units and power off.
+            # No time argument is passed: the wrapper's time arg is a legacy
+            # shutdown(8) slot the other inits mostly ignore too.
+            if [ -x "$SYSTEMCTL" ]; then
+                case "$action" in
+                    reboot)   "$SYSTEMCTL" reboot ;;
+                    halt)     "$SYSTEMCTL" halt ;;
+                    poweroff) "$SYSTEMCTL" poweroff ;;
+                esac
+                return $?
+            fi
+            ;;
+        busybox:*)
+            if [ -x "$BUSYBOX" ]; then
+                "$BUSYBOX" "$action"; return $?
+            fi
+            ;;
+    esac
+    return 1
+}
+
+# --- 1. declared inits (current, then previous) ----------------------------
+ground="$(active_init)"
+current=""
+[ -s "$INIT_DB/current" ] && current="$(cat "$INIT_DB/current" 2>/dev/null)"
+previous=""
+[ -s "$INIT_DB/previous" ] && previous="$(cat "$INIT_DB/previous" 2>/dev/null)"
+
+# Only try a declared init if it matches what is actually PID1. During the
+# swap window (declared != PID1) its tool cannot work, so skip straight to
+# the next candidate instead of invoking a tool that may "succeed" doing
+# nothing (openrc-shutdown broadcasting without powering off).
+for init in "$current" "$previous"; do
+    [ -n "$init" ] || continue
+    [ "$init" = "$ground" ] || continue
+    if try_init "$init"; then
+        exit 0
+    fi
+done
+
+# --- 2. ground truth: dispatch to whatever is really PID1 ------------------
+if [ "$ground" != "unknown" ] && try_init "$ground"; then
+    exit 0
+fi
+
+# --- 3. last resort: direct kernel action ----------------------------------
+# Never re-exec this wrapper: /sbin/shutdown and /bin/shutdown resolve back
+# to it when no real shutdown tool exists, and exec'ing it again loops
+# forever (each lap retrying the failing init tool). Only use
+# FALLBACK_SHUTDOWN when it is a genuinely different program; otherwise go
+# straight to busybox, which issues reboot(2) itself with -f.
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+fb="$(readlink -f "$FALLBACK_SHUTDOWN" 2>/dev/null || echo "$FALLBACK_SHUTDOWN")"
+if [ -n "$FALLBACK_SHUTDOWN" ] && [ "$fb" != "$self" ] && [ -x "$fb" ]; then
+    case "$action" in
+        reboot) exec "$fb" -r "$timearg" ;;
+        halt)   exec "$fb" -H "$timearg" ;;
+        *)      exec "$fb" -p "$timearg" ;;
+    esac
+fi
+
+if [ -x "$BUSYBOX" ]; then
+    case "$action" in
+        reboot)   exec "$BUSYBOX" reboot -f ;;
+        halt)     exec "$BUSYBOX" halt -f ;;
+        *)        exec "$BUSYBOX" poweroff -f ;;
+    esac
+fi
+
+echo "error: cannot $action: no init shutdown tool and no busybox available" >&2
+exit 1

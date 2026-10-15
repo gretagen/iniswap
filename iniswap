@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_INITS="openrc runit dinit"
+VALID_INITS="openrc runit dinit systemd"
 LIMINE_CONF="/boot/limine.conf"
 LIB_DIR="/usr/lib/declaration/iniswap"
 
@@ -23,6 +23,7 @@ usage() {
     echo "  openrc   OpenRC (default)"
     echo "  runit    runit"
     echo "  dinit    dinit"
+    echo "  systemd  systemd"
 }
 
 check_root() {
@@ -53,6 +54,7 @@ detect_current_init() {
             */runit-init)   echo "runit" ;;
             */dinit)        echo "dinit" ;;
             */openrc-init)  echo "openrc" ;;
+            */systemd)      echo "systemd" ;;
             *)              echo "unknown" ;;
         esac
     else
@@ -79,6 +81,7 @@ update_boot() {
         openrc) init_param="init=/sbin/openrc-init" ;;
         runit)  init_param="init=/sbin/runit-init" ;;
         dinit)  init_param="init=/sbin/dinit" ;;
+        systemd) init_param="init=/usr/lib/systemd/systemd" ;;
         *)
             echo "Error: unsupported init '$init'." >&2
             return 1
