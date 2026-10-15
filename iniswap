@@ -81,7 +81,7 @@ update_boot() {
         openrc) init_param="init=/sbin/openrc-init" ;;
         runit)  init_param="init=/sbin/runit-init" ;;
         dinit)  init_param="init=/sbin/dinit" ;;
-        systemd) init_param="init=/usr/lib/systemd/systemd" ;;
+        systemd) init_param="init=/sbin/systemd" ;;
         *)
             echo "Error: unsupported init '$init'." >&2
             return 1
