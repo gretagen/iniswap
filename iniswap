@@ -39,7 +39,7 @@ detect_current_init() {
         return
     fi
 
-    # Only the first cmdline line (the default /Haliade OS entry) declares
+    # Only the first cmdline line (the default /Haliade SYS entry) declares
     # the active init — generation entries carry their own historical init=.
     local cmdline
     cmdline=$(grep -m1 '^[[:space:]]*cmdline:' "$LIMINE_CONF" 2>/dev/null || true)
@@ -88,7 +88,7 @@ update_boot() {
             ;;
     esac
 
-    # Patch ONLY the first cmdline line (the default /Haliade OS entry).
+    # Patch ONLY the first cmdline line (the default /Haliade SYS entry).
     # Generation entries each record the init that was active when they were
     # created and must never be rewritten — a pre-swap generation has to boot
     # the *previous* init, not the target one.

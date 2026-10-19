@@ -1,5 +1,5 @@
 #!/bin/bash
-# universal shutdown/reboot — Haliade OS
+# universal shutdown/reboot — Haliade system
 #
 # Works regardless of which init system (OpenRC, runit, dinit, systemd) is
 # selected. Read the declared init from /var/db/init/current (written by
