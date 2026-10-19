@@ -11,7 +11,7 @@ usage() {
     echo "Swap the init system on next boot."
     echo
     echo "Commands:"
-    echo "  iniswap <init>    Swap to a different init system (needs superuser)"
+    echo "  iniswap <init>    Swap to a different init system"
     echo "  iniswap --status  Show current init system"
     echo
     echo "Flags:"
@@ -213,5 +213,5 @@ echo "Recording init state..."
 record_init_state
 
 echo
-echo "Done. Init swapped: $current -> $target"
-echo "Reboot to activate $target."
+echo "Init swapped: $current -> $target"
+echo "Reboot to change to $target."
