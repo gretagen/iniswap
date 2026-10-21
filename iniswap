@@ -3,7 +3,7 @@ set -euo pipefail
 
 VALID_INITS="openrc runit dinit systemd"
 LIMINE_CONF="/boot/limine.conf"
-LIB_DIR="/usr/lib/declaration/iniswap"
+LIB_DIR="/usr/lib/nacelle/iniswap"
 
 usage() {
     echo "Usage: iniswap [--pass] <init>"
@@ -108,8 +108,7 @@ update_boot() {
 
     mv "$tmp" "$LIMINE_CONF"
 }
-
-# --- record init identity ------------------------------------------------
+# record init identity
 # The universal shutdown/reboot commands (/usr/bin/shutdown, /usr/bin/reboot)
 # read /var/db/init/current and fall back to /var/db/init/previous: after a
 # swap the target init is only declared, not yet PID1, so its own shutdown
