@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_INITS="openrc runit dinit systemd"
+VALID_INITS="openrc runit dinit systemd shepherd"
 LIMINE_CONF="/boot/limine.conf"
 LIB_DIR="/usr/lib/nacelle/iniswap"
 
@@ -24,6 +24,7 @@ usage() {
     echo "  runit    runit"
     echo "  dinit    dinit"
     echo "  systemd  systemd"
+    echo "  shepherd GNU Shepherd"
 }
 
 check_root() {
@@ -55,6 +56,7 @@ detect_current_init() {
             */dinit)        echo "dinit" ;;
             */openrc-init)  echo "openrc" ;;
             */systemd)      echo "systemd" ;;
+            */shepherd)     echo "shepherd" ;;
             *)              echo "unknown" ;;
         esac
     else
@@ -82,6 +84,7 @@ update_boot() {
         runit)  init_param="init=/sbin/runit-init" ;;
         dinit)  init_param="init=/sbin/dinit" ;;
         systemd) init_param="init=/sbin/systemd" ;;
+        shepherd) init_param="init=/sbin/shepherd" ;;
         *)
             echo "Error: unsupported init '$init'." >&2
             return 1
