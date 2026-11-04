@@ -1,8 +1,8 @@
 #!/bin/bash
 # universal shutdown/reboot — Haliade system
 #
-# Works regardless of which init system (OpenRC, runit, dinit, systemd) is
-# selected. Read the declared init from /var/db/init/current (written by
+# Works regardless of which init system (OpenRC, runit, dinit, systemd,
+# shepherd) is selected. Read the declared init from /var/db/init/current (written by
 # iniswap after every swap) and fall back to /var/db/init/previous, then to
 # the init that is actually PID1 (/proc/1/comm), then to a direct busybox
 # kernel action.
@@ -40,6 +40,14 @@ DINIT_SHUTDOWN=${DINIT_SHUTDOWN:-/usr/sbin/dinit-shutdown}
 # systemd's control tool. systemctl missing → fall through to the busybox
 # last resort, same as any other absent init tool.
 SYSTEMCTL=${SYSTEMCTL:-/usr/bin/systemctl}
+# shepherd's control tool. Like systemctl, it asks shepherd (PID1) to stop
+# the service graph with the right action; shepherd then performs the final
+# kernel action itself. shepherd-bins also ships reboot/poweroff/halt client
+# programs — deliberately NOT used here: those names resolve back to this
+# wrapper (/sbin/reboot etc.), which would re-exec it and loop forever.
+# 'halt' and 'power-off' are the same action upstream (the halt client sends
+# power-off), so there is no separate kernel-halt path to preserve.
+HERD=${HERD:-/usr/bin/herd}
 BUSYBOX=${BUSYBOX:-/bin/busybox}
 RUNIT_MARKER=${RUNIT_MARKER:-/etc/runit/reboot}
 FALLBACK_SHUTDOWN=${FALLBACK_SHUTDOWN:-/sbin/shutdown}
@@ -79,6 +87,7 @@ active_init() {
         runit|runit-init) printf '%s\n' "runit" ;;
         dinit)       printf '%s\n' "dinit"    ;;
         systemd)     printf '%s\n' "systemd"  ;;
+        shepherd)    printf '%s\n' "shepherd" ;;
         busybox|init) printf '%s\n' "busybox" ;; # busybox init reports "init"
         *)           printf '%s\n' "unknown"  ;;
     esac
@@ -155,6 +164,20 @@ try_init() {
                     reboot)   "$SYSTEMCTL" reboot ;;
                     halt)     "$SYSTEMCTL" halt ;;
                     poweroff) "$SYSTEMCTL" poweroff ;;
+                esac
+                return $?
+            fi
+            ;;
+        shepherd:*)
+            # herd asks shepherd (PID1, service 'root') to roll the whole
+            # service graph down and perform the final action itself.
+            # shepherd has no distinct kernel-halt: 'power-off' is what the
+            # upstream halt client sends, so halt and poweroff share it.
+            # No time argument is passed, same as the other inits.
+            if [ -x "$HERD" ]; then
+                case "$action" in
+                    reboot)   "$HERD" reboot   root ;;
+                    halt|poweroff) "$HERD" power-off root ;;
                 esac
                 return $?
             fi
