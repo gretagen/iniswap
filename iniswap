@@ -3,7 +3,7 @@ set -euo pipefail
 
 VALID_INITS="openrc runit dinit systemd"
 LIMINE_CONF="/boot/limine.conf"
-LIB_DIR="/usr/lib/nacelle/iniswap"
+LIB_DIR="/usr/lib/iniswap"
 
 usage() {
     echo "Usage: iniswap [--pass] <init>"
